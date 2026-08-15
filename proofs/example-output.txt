@@ -1,0 +1,79 @@
+Real output from ./deploy/run-proofs.sh against a deployed stack.
+Resource names and the account id are redacted; nothing else is edited.
+
+Tenant isolation proofs
+=======================
+region=us-west-2 bucket=tenant-data-<suffix> table=TenantItems-<suffix>
+database=<db>.<region>.rds.amazonaws.com:5432/tenancy
+Setup
+-----
+schema applied
+Vending scoped credentials
+--------------------------
+[  held  ] both tenants received credentials from the same IAM role
+           session arn ends with .../tenant-acme
+S3: one bucket, a prefix per tenant
+-----------------------------------
+[  held  ] each tenant can write inside its own prefix
+[  held  ] each tenant can read its own object
+[  held  ] acme cannot GET globex's object
+           AccessDenied: User: arn:aws:sts::123456789012:assumed-role/TenantAccessRole/tenant-acme is not authorized to perform: s3:GetObj
+[  held  ] acme can list its own prefix
+           1 object(s)
+[  held  ] acme cannot list globex's prefix
+           AccessDenied: User: arn:aws:sts::123456789012:assumed-role/TenantAccessRole/tenant-acme is not authorized to perform: s3:ListBu
+[  held  ] acme cannot list the whole bucket
+           AccessDenied: User: arn:aws:sts::123456789012:assumed-role/TenantAccessRole/tenant-acme is not authorized to perform: s3:ListBu
+DynamoDB: one table, the tenant is the partition key
+----------------------------------------------------
+[  held  ] each tenant can write its own partition
+[  held  ] acme can query its own partition
+           1 item(s)
+[  held  ] acme cannot query globex's partition
+           AccessDeniedException: User: arn:aws:sts::123456789012:assumed-role/TenantAccessRole/tenant-acme is not authorized to perform: dynamodb:
+[  held  ] acme cannot Scan the table
+           AccessDeniedException: User: arn:aws:sts::123456789012:assumed-role/TenantAccessRole/tenant-acme is not authorized to perform: dynamodb:
+KMS: one key, an encryption context per tenant
+----------------------------------------------
+[  held  ] each tenant can encrypt under its own context
+[  held  ] acme can decrypt its own ciphertext
+[  held  ] acme cannot decrypt globex's ciphertext
+           AccessDeniedException: User: arn:aws:sts::123456789012:assumed-role/TenantAccessRole/tenant-acme is not authorized to perform: kms:Decry
+[  held  ] acme cannot decrypt it by claiming its own context
+           InvalidCiphertextException: (no message) -- this one is not IAM. The policy allowed the call; the ciphertext failed to authenticate under the wrong context.
+PostgreSQL: one database, row-level security
+--------------------------------------------
+[  held  ] an unfiltered SELECT as acme returns only acme rows
+           3 rows, all tenant_id=acme; the query had no WHERE clause
+[  held  ] a tautology in the WHERE clause changes nothing
+           3 rows, still only acme
+[  held  ] asking explicitly for globex returns nothing
+           the policy is ANDed into the query plan, so this is not reachable
+[  held  ] acme cannot insert a row labelled globex
+           new row violates row-level security policy for table "invoices"
+[  held  ] a connection with no tenant set sees zero rows
+           count = 0
+[  held  ] the app role cannot disable row-level security
+           must be owner of table invoices
+[  held  ] the app role cannot become the table owner
+           permission denied to set role "app_owner"
+[  held  ] the app role cannot drop the policy
+           must be owner of relation invoices
+PostgreSQL: what ENABLE without FORCE actually protects
+-------------------------------------------------------
+[  held  ] FORCE: the table owner is subject to the policy
+           invoices: 3 rows visible to the owner (only acme's)
+[  held  ] no FORCE: the table owner sees every tenant
+           invoices_unforced: 7 rows visible to the owner, all tenants. Same policy, same query, one missing keyword. This is why the role the application logs in as must not own the tables.
+Connection pooling: the way this leaks in production
+----------------------------------------------------
+[  note  ] a session-level SET is still there on the next request
+           request 1 set tenant_id='acme' and saw 3 rows. Request 2 set nothing and read tenant_id='acme', 3 rows. Row-level security did exactly what it was told; it was told the wrong tenant.
+[  held  ] SET LOCAL is gone at COMMIT, so nothing can be inherited
+           after the transaction the setting is '' and the same query returns 0 rows. The next request starts with no tenant, and no tenant means no rows.
+Result
+------
+26/26 isolation checks held
+No cross-tenant access was possible.
+
+exit code 0

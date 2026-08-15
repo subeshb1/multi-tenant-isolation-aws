@@ -1,0 +1,14 @@
+node_modules/
+infra/cdk.out/
+infra/cdk.out*/
+infra/cdk.context.json
+infra/*.js
+infra/*.d.ts
+proofs/.venv/
+proofs/__pycache__/
+.env
+.env.*
+*.pem
+*.key
+.aws/
+.DS_Store
